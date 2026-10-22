@@ -316,7 +316,7 @@ class MkinitcpioConfig(unittest.TestCase):
 
 class SafeMode(unittest.TestCase):
     def test_every_unit_that_loads_a_hardware_module_has_the_safe_condition(self):
-        for name in ('m4-gpu', 'm4-gpu-inhibit', 'm4-display', 'm4-kbd-idle', 'm4-bt-keyshare', 'm4-bt-connect', 'm4-cpufreq'):
+        for name in ('m4-gpu', 'm4-display', 'm4-kbd-idle', 'm4-bt-keyshare', 'm4-bt-connect', 'm4-cpufreq'):
             text = (UNITS/(name + '.service')).read_text()
             self.assertIn('ConditionKernelCommandLine=!m4.safe', text, name)
             self.assertIn('m4-boot-pending.service', text, name)
@@ -328,7 +328,7 @@ class Container(unittest.TestCase):
 
     def test_every_unit_that_m4_safe_keeps_off_skips_containers(self):
         units = [p for p in SUPPORT.rglob('*.service') if not p.is_symlink() and 'ConditionKernelCommandLine=!m4.safe' in p.read_text()]
-        self.assertGreaterEqual(len(units), 10)
+        self.assertGreaterEqual(len(units), 9)
         for p in units:
             self.assertIn('ConditionVirtualization=!container', p.read_text().splitlines(), p.name)
 

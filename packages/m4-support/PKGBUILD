@@ -2,7 +2,7 @@
 # Built from the repo tree userspace/support; machine values come from local.conf (tools/template.py). Build: makepkg -f (on the M4).
 pkgname=m4-support
 pkgver=1.0
-pkgrel=37
+pkgrel=38
 pkgdesc='M4 (Apple T6040 / J616s) platform support: m4-boot, mkinitcpio hooks, units, modprobe.d, session and device helpers'
 arch=(any)
 url='https://github.com/jgoyvaerts/omarchy-m4'
