@@ -9,8 +9,9 @@ handling lives in quickshell), so that hook never ran. This service watches the 
     sets 0;
   * on the first event afterwards it restores the saved level, but only if the level is still 0 (the owner or
     Omarchy may have changed it meanwhile: lock-screen blanking, the SUPER + brightness keys; those are never
-    overridden), and it refreshes brightnessctl's saved slot of the owner so Omarchy's own later `restore` (after
-    a lock blank that read our 0) restores the same level instead of 0;
+    overridden), and it refreshes brightnessctl's saved slot of every user who has one for the LED (the desktop
+    user, whatever their UID) so Omarchy's own later `restore` (after a lock blank that read our 0) restores the
+    same level instead of 0;
   * if something sets 0 right after our restore with no further input (Omarchy's resume handler racing us), it
     re-asserts the level once; a later input event always wins;
   * it restores a level it dimmed when it is stopped (so systemd-backlight saves the real level at shutdown) and
@@ -27,7 +28,7 @@ RESCAN_S = 5.0
 REASSERT_S = 0.4
 OPT_OUT = '/etc/m4/kbd-idle-off'
 SAVED = '/run/m4-kbd-idle-saved'
-OWNER_UID = 1000                          # the desktop user (Omarchy's first account)
+RUN_USER = '/run/user'                    # brightnessctl keeps its saved slots in $XDG_RUNTIME_DIR/brightnessctl
 EVENT = struct.Struct('llHHi')
 EV_KEY, EV_REL, EV_ABS = 1, 2, 3
 ACTIVITY = (EV_KEY, EV_REL, EV_ABS)       # not EV_SYN / EV_MSC / EV_LED
@@ -120,20 +121,33 @@ def find_led(leds='/sys/class/leds'):
     return None
 
 
-def owner_slot(led_name, level, run=subprocess.run):
-    """Refresh the owner's brightnessctl saved slot (best effort): Omarchy's lock blank is `brightnessctl -sd DEV set 0`
+def slot_owners(led_name, run_user=RUN_USER):
+    """UIDs with a brightnessctl saved slot for this LED. The desktop user is not always UID 1000 (a build account
+    can own that), so the slot files themselves name the users whose `restore` would read a stale level."""
+    owners = []
+    for slot in sorted(glob.glob(os.path.join(run_user, '[0-9]*', 'brightnessctl', 'leds', glob.escape(led_name)))):
+        uid = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(slot))))
+        if uid.isdigit() and int(uid) != 0:
+            owners.append(int(uid))
+    return owners
+
+
+def owner_slot(led_name, level, run=subprocess.run, run_user=RUN_USER):
+    """Refresh the owners' brightnessctl saved slots (best effort): Omarchy's lock blank is `brightnessctl -sd DEV set 0`
     and its unlock is `brightnessctl -rd DEV`; if the blank ran after our dim it saved 0, and the restore would put
-    0 back. `-sd DEV set N` with the level already N saves N."""
-    try:
-        owner = pwd.getpwuid(OWNER_UID).pw_name
-    except KeyError:
-        return
-    command = ['/usr/sbin/runuser', '-u', owner, '--', '/usr/bin/env', 'XDG_RUNTIME_DIR=/run/user/%d' % OWNER_UID,
-               '/usr/bin/brightnessctl', '-q', '-sd', led_name, 'set', str(level)]
-    try:
-        run(command, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    0 back. `-sd DEV set N` with the level already N saves N. It runs as each owner, never writing their files as root."""
+    for uid in slot_owners(led_name, run_user):
+        try:
+            owner = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            continue
+        command = ['/usr/sbin/runuser', '-u', owner, '--', '/usr/bin/env',
+                   'XDG_RUNTIME_DIR=%s' % os.path.join(run_user, str(uid)),
+                   '/usr/bin/brightnessctl', '-q', '-sd', led_name, 'set', str(level)]
+        try:
+            run(command, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
 
 class Idle:
