@@ -1,6 +1,8 @@
 #!/usr/bin/python3 -I
 """m4-boot tests: Boot ABI v1 writer, entry rotation, refusals and the boot counter (boot-pending / boot-ok / safe mode)."""
+import contextlib
 import hashlib
+import io
 import importlib.machinery
 import importlib.util
 import os
@@ -660,6 +662,84 @@ class Counter(unittest.TestCase):
         self.t.prop('m4,boot-entry', '7.1.13-m4')
         self.assertEqual(self.t.run('status'), 0)
         self.assertIn('the loader will boot it', '\n'.join(self.t.lines))
+
+
+def make_fdt(nvme_compatible=None, node='nvme@44dcc0000'):
+    """A minimal flattened device tree: the root, /chosen and, if given, a top-level NVMe node with that compatible list."""
+    strings = b'compatible\0'
+    def node_bytes(name, props):
+        out = struct.pack('>I', 1) + name.encode() + b'\0'
+        out += b'\0' * (-len(out) % 4)
+        for value in props:
+            out += struct.pack('>III', 3, len(value), 0) + value + b'\0' * (-len(value) % 4)
+        return out
+    body = node_bytes('', [b'apple,j616s\0'])
+    body += node_bytes('chosen', []) + struct.pack('>I', 2)
+    if nvme_compatible is not None:
+        body += node_bytes(node, [b''.join(c.encode() + b'\0' for c in nvme_compatible)]) + struct.pack('>I', 2)
+    body += struct.pack('>II', 2, 9)
+    off_rsv = 40
+    off_struct = off_rsv + 16
+    off_strings = off_struct + len(body)
+    total = off_strings + len(strings)
+    header = struct.pack('>IIIIIIIIII', 0xd00dfeed, total, off_struct, off_strings, off_rsv, 17, 16, 0, len(strings), len(body))
+    return header + bytes(16) + body + strings
+
+
+class NvmeBinding(unittest.TestCase):
+    """J616s: a board.dtb that drops the running NVMe binding is refused (7.3.0-fbtest.1, 2026-10-23)."""
+    GUARDED = 'lab,j616-nvme-partition-25g83'
+
+    def setUp(self):
+        self.t = Tree(self)
+        self.t.prop('m4,loader-version', 'rev15-j616s-9')
+        live = self.t.dir_path()/'nvme@44dcc0000'
+        live.mkdir()
+        (live/'compatible').write_bytes(self.GUARDED.encode() + b'\0apple,t6041-nvme-ans2\0')
+        os.environ.pop(m4boot.NVME_GUARD_OVERRIDE, None)
+
+    def kernel_with(self, kver, dtb):
+        self.t.kernel(kver)
+        (self.t.modules/kver/'dtb/apple/t6040-j616s.dtb').write_bytes(dtb)
+
+    def test_parser_reads_the_nvme_compatible(self):
+        raw = m4boot.fdt_root_node_prop(make_fdt([self.GUARDED, 'x']), 'nvme@', 'compatible')
+        self.assertEqual(raw, self.GUARDED.encode() + b'\0x\0')
+        self.assertIsNone(m4boot.fdt_root_node_prop(make_fdt(None), 'nvme@', 'compatible'))
+        self.assertIsNone(m4boot.fdt_root_node_prop(b'dtb' * 100, 'nvme@', 'compatible'))
+
+    def test_same_binding_installs(self):
+        self.kernel_with('7.3.0-m4.28', make_fdt([self.GUARDED, 'apple,t6041-nvme-ans2']))
+        self.assertEqual(self.t.run('install', '--kver', '7.3.0-m4.28'), 0)
+        self.assertTrue((self.t.boot/'m4/entries/7.3.0-m4.28').is_dir())
+
+    def test_other_binding_is_refused_and_nothing_changes(self):
+        self.kernel_with('7.1.12-m4.27', make_fdt([self.GUARDED]))
+        self.assertEqual(self.t.run('install', '--kver', '7.1.12-m4.27'), 0)
+        conf = (self.t.boot/'m4/loader.conf').read_bytes()
+        self.kernel_with('7.3.0-fbtest.1', make_fdt(['apple,t6041-nvme-ans2']))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertNotEqual(self.t.run('install', '--kver', '7.3.0-fbtest.1'), 0)
+        self.assertFalse((self.t.boot/'m4/entries/7.3.0-fbtest.1').exists())
+        self.assertEqual((self.t.boot/'m4/loader.conf').read_bytes(), conf)
+        self.assertIn('could not take the SSD over', err.getvalue())
+
+    def test_missing_nvme_node_is_refused(self):
+        self.kernel_with('7.3.0-x', make_fdt(None))
+        self.assertNotEqual(self.t.run('install', '--kver', '7.3.0-x'), 0)
+        self.assertFalse((self.t.boot/'m4/entries/7.3.0-x').exists())
+
+    def test_override(self):
+        self.kernel_with('7.3.0-y', make_fdt(['apple,t6041-nvme-ans2']))
+        os.environ[m4boot.NVME_GUARD_OVERRIDE] = '1'
+        self.addCleanup(os.environ.pop, m4boot.NVME_GUARD_OVERRIDE, None)
+        self.assertEqual(self.t.run('install', '--kver', '7.3.0-y'), 0)
+
+    def test_no_loader_no_check(self):
+        (self.t.chosen/'m4,loader-version').unlink()
+        self.kernel_with('7.3.0-z', make_fdt(['apple,t6041-nvme-ans2']))
+        self.assertEqual(self.t.run('install', '--kver', '7.3.0-z'), 0)
 
 
 if __name__ == '__main__':

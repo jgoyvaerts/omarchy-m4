@@ -259,6 +259,50 @@ def reason_text(reason):
     return 'the loader chose its rescue set (reason: %s)' % (reason or 'not reported')
 
 
+FDT_MAGIC = 0xd00dfeed
+NVME_GUARD_OVERRIDE = 'M4_BOOT_ALLOW_NVME_CHANGE'
+
+
+def fdt_root_node_prop(blob, prefix, prop):
+    """PROP of the first top-level node whose name starts with PREFIX in a flattened device tree, or None (also for a blob that
+    is not an FDT)."""
+    try:
+        if len(blob) < 40 or struct.unpack_from('>I', blob, 0)[0] != FDT_MAGIC:
+            return None
+        off_struct, off_strings = struct.unpack_from('>II', blob, 8)
+        size_struct = struct.unpack_from('>I', blob, 36)[0]
+        p, end, depth, match = off_struct, off_struct + size_struct, 0, False
+        while p + 4 <= end:
+            token = struct.unpack_from('>I', blob, p)[0]
+            p += 4
+            if token == 1:                                  # FDT_BEGIN_NODE
+                e = blob.index(b'\0', p)
+                depth += 1
+                if depth == 2:
+                    match = blob[p:e].decode('ascii', 'replace').startswith(prefix)
+                p = (e + 1 + 3) & ~3
+            elif token == 2:                                # FDT_END_NODE
+                if depth == 2 and match:
+                    return None
+                depth -= 1
+            elif token == 3:                                # FDT_PROP
+                length, nameoff = struct.unpack_from('>II', blob, p)
+                p += 8
+                value = blob[p:p + length]
+                p = (p + length + 3) & ~3
+                if depth == 2 and match:
+                    n = off_strings + nameoff
+                    if blob[n:blob.index(b'\0', n)].decode('ascii', 'replace') == prop:
+                        return value
+            elif token == 4:                                # FDT_NOP
+                continue
+            else:                                           # FDT_END or garbage
+                return None
+    except (struct.error, ValueError):
+        return None
+    return None
+
+
 class Boot:
     def __init__(self, boot='/boot', modules='/usr/lib/modules', cmdline=None, mkinitcpio='mkinitcpio', out=print,
                  chosen=CHOSEN, proc_cmdline=PROC_CMDLINE, systemctl='systemctl', sleep=time.sleep, clock=time.monotonic,
@@ -629,6 +673,7 @@ class Boot:
         need(len(image) <= IMAGE_MAX, 'Image is %d B, the loader window is %d B' % (len(image), IMAGE_MAX))
         dtb_bytes = dtb.read_bytes()
         need(0 < len(dtb_bytes) <= DTB_MAX, 'board.dtb is %d B, the window is %d B' % (len(dtb_bytes), DTB_MAX))
+        self.nvme_binding_check(kver, dtb_bytes)
         self.entries.mkdir(parents=True, exist_ok=True)
         self.sweep()
         self.keep_restore()
@@ -671,6 +716,27 @@ class Boot:
         self.out('m4-boot: entry %s %s (Image %d B, initramfs %d B, dtb %d B)%s' % (
             name, 'rebuilt in place' if existing else 'written', len(image), len(ram), len(dtb_bytes), ', default' if make_default else ''))
         return name
+
+    def nvme_binding_check(self, kver, dtb_bytes):
+        """On a machine the M4 loader booted, the new board.dtb must keep the running NVMe binding (its first compatible). The loader
+        leaves ANS running and hands it over through that binding (m4,ans-live, the partition write guard); a kernel whose tree binds
+        the SSD otherwise cold-starts ANS, gets no root and is booted again and again: 7.3.0-fbtest.1 (2026-10-23, compatible
+        apple,t6041-nvme-ans2 instead of lab,j616-nvme-partition-25g83) needed One True Recovery. M4_BOOT_ALLOW_NVME_CHANGE=1 skips
+        this once the new binding is known to adopt the loader's session."""
+        dt = Path(self.chosen).parent
+        if not (Path(self.chosen)/'m4,loader-version').exists() or os.environ.get(NVME_GUARD_OVERRIDE) == '1':
+            return
+        live = sorted(dt.glob('nvme@*/compatible'))
+        if not live:
+            return
+        running = live[0].read_bytes().split(b'\0')[0].decode('ascii', 'replace')
+        if not running:
+            return
+        raw = fdt_root_node_prop(dtb_bytes, 'nvme@', 'compatible')
+        new = [] if raw is None else [x.decode('ascii', 'replace') for x in raw.split(b'\0') if x]
+        need(running in new, 'board.dtb of %s binds the NVMe controller as %s, not as the running %s: that kernel could not take the SSD over '
+             'from the M4 loader (no root, a boot loop). Nothing was written. Override only for a binding known to adopt the loader\'s ANS '
+             'session: %s=1' % (kver, ', '.join(new) or 'nothing', running, NVME_GUARD_OVERRIDE))
 
     def replace_entry(self, tmp, final):
         """Put the verified TMP directory in place of FINAL: an atomic exchange, else FINAL is renamed aside first (sweep restores it)."""

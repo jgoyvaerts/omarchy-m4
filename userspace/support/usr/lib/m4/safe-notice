@@ -2,6 +2,7 @@
 """Safe-mode notice: when the loader booted its rescue set (/chosen m4,boot-source = rescue) say why and what to do.
 
 Runs once per login (user unit m4-safe-notice.service). The text is also printed, so it is in the journal and in `m4-boot status`."""
+import os
 import subprocess
 import sys
 import time
@@ -31,12 +32,34 @@ def prop(name):
         return None
 
 
+TITLE = 'M4 started in safe mode'
+SHELL_IPC = '/usr/bin/omarchy-shell'
+
+
+def dismiss_stale():
+    """Omarchy's shell keeps the cards that were on screen at shutdown (~/.local/state/omarchy/notifications/live.json) and shows
+    them again after the next login: the critical safe-mode card of a rescue boot came back on the normal boot after it and read
+    as "still in safe mode" (2026-10-24). Close it on every boot that is not a rescue boot. The shell restores its cards when it
+    starts, so try for a while."""
+    if not Path(SHELL_IPC).is_file():
+        return
+    env = dict(os.environ)
+    env.setdefault('OMARCHY_PATH', '/usr/share/omarchy')     # omarchy-shell exits without a word when it is unset
+    for _ in range(15):
+        p = subprocess.run([SHELL_IPC, 'notifications', 'dismiss', TITLE], capture_output=True, text=True, env=env)
+        if p.returncode == 0 and p.stdout.strip() == 'ok':
+            print('m4-safe-notice: closed the safe-mode card of an earlier rescue boot', flush=True)
+            return
+        time.sleep(2)
+
+
 def main():
     if prop('m4,boot-source') != 'rescue':
+        dismiss_stale()
         return 0
     reason = prop('m4,boot-reason')
     why = next((text for key, text in REASONS if reason and key in reason), 'the loader chose its rescue set (reason: %s)' % (reason or 'not reported'))
-    title = 'M4 started in safe mode'
+    title = TITLE
     body = ('Reason: %s.\nThe GPU, display, microphone and other private drivers were not loaded; this desktop is software-rendered.\n'
             'Run `m4-boot status`. To start the normal system again: `sudo m4-boot select <entry>` (the entry is shown by `m4-boot list`).' % why)
     print(title + '\n' + body, flush=True)
