@@ -2,7 +2,7 @@
 # per-device calibration and are never in git: tools/collect-firmware.sh copies them from an installed system into userspace/firmware/.
 pkgname=m4-firmware
 pkgver=1.0
-pkgrel=3
+pkgrel=4
 pkgdesc='Firmware for the Apple M4 (T6040 / J616s): BCM4388 Wi-Fi (brcmfmac) and Bluetooth, AOP ambient light calibration, front camera (IMX958) setfile, trackpad firmware'
 arch=(any)
 url='https://github.com/jgoyvaerts/omarchy-m4'
@@ -29,4 +29,7 @@ package() {
   cd "$srcdir/tree"
   cp -a usr "$pkgdir/"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # 7.3 (m4/aurora-7.3, aurora integration/aurora) requests BCM4388 revision 6 as 4388c2, 7.1 m4/aurora as 4388c0: same files
+  cd "$pkgdir/usr/lib/firmware/brcm"
+  for f in brcmfmac4388c0-pcie.apple,hostomel*; do ln -s "$f" "${f/4388c0/4388c2}"; done
 }
