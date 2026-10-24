@@ -3,7 +3,7 @@
 the clusters stay at p-state 1 (the kernel's default governor is powersave, and apple_soc_cpufreq writes nothing at load).
 
   1. macsmc_hwmon, then the cpu-die-thermal zone: TCMz (CPU die max) readable and sane, the 113 C passive trip set
-  2. apple_soc_cpufreq, then the three policies (P0 0,10-13 / E 1-4 / P1 5-9) bound to the zone as cooling devices
+  2. apple_soc_cpufreq, then the three policies of a known layout (LAYOUTS) bound to the zone as cooling devices
   3. scaling_max_freq of each policy = its cap (a table frequency), THEN the schedutil governor
 
 Default: no caps (each policy's top table frequency). Optional /etc/m4/cpufreq.conf sets lower ones:
@@ -27,9 +27,13 @@ ROOT = Path(os.environ.get('M4_CPUFREQ_ROOT', '/'))        # tests point this at
 CONF = 'etc/m4/cpufreq.conf'
 CPUFREQ = 'sys/devices/system/cpu/cpufreq'
 THERMAL = 'sys/class/thermal'
-POLICIES = {'P0': ('policy0', [0, 10, 11, 12, 13], 'P'), 'E': ('policy1', [1, 2, 3, 4], 'E'),
-            'P1': ('policy5', [5, 6, 7, 8, 9], 'P')}
-CDEVS = {'cpufreq-cpu0', 'cpufreq-cpu1', 'cpufreq-cpu5'}
+# The CPU numbering follows the kernel's device tree: each known layout is listed whole and must match exactly.
+LAYOUTS = (
+    # linux-m4 7.1.12 (m4/aurora): P0 0,10-13 / E 1-4 / P1 5-9
+    {'P0': ('policy0', [0, 10, 11, 12, 13], 'P'), 'E': ('policy1', [1, 2, 3, 4], 'E'), 'P1': ('policy5', [5, 6, 7, 8, 9], 'P')},
+    # linux-m4 7.3 (m4/aurora-7.3): P0 0,5-8 / E 1-4 / P1 9-13
+    {'P0': ('policy0', [0, 5, 6, 7, 8], 'P'), 'E': ('policy1', [1, 2, 3, 4], 'E'), 'P1': ('policy9', [9, 10, 11, 12, 13], 'P')},
+)
 TRIP_MC = 113000
 WAIT_S = 10.0
 
@@ -117,8 +121,10 @@ def start(run=lambda argv: subprocess.run(argv).returncode, sleep=time.sleep):
     if read(z/'trip_point_0_type') != 'passive' or read(z/'trip_point_0_temp') != str(TRIP_MC):
         raise Refused('the cpu-die zone does not have its %d passive trip' % TRIP_MC)
     modprobe('apple_soc_cpufreq', run)
-    wait_for(lambda: all((ROOT/CPUFREQ/p).is_dir() for p, _, _ in POLICIES.values()), 'the three cpufreq policies', sleep)
-    for name, (p, cpus, kind) in POLICIES.items():
+    policies = wait_for(lambda: next((l for l in LAYOUTS if all((ROOT/CPUFREQ/p).is_dir() for p, _, _ in l.values())), None),
+                        'the three cpufreq policies', sleep)
+    cdev_names = {'cpufreq-cpu%d' % cpus[0] for _, cpus, _ in policies.values()}
+    for name, (p, cpus, kind) in policies.items():
         related = [int(x) for x in (read(Path(CPUFREQ)/p/'related_cpus') or '').split()]
         if related != cpus:
             raise Refused('%s %s covers CPUs %s, not %s' % (name, p, related, cpus))
@@ -129,21 +135,21 @@ def start(run=lambda argv: subprocess.run(argv).returncode, sleep=time.sleep):
             caps = dict(caps or {}, **{kind: max(table)})
         if caps[kind] not in table:
             raise Refused('%s cap %d kHz is not one of %s' % (name, caps[kind], table))
-    cdevs = wait_for(lambda: bound_cdevs(z) >= CDEVS and bound_cdevs(z), 'the zone binding to the three policies', sleep)
-    if not CDEVS <= cdevs:
-        raise Refused('the zone is bound to %s, not %s' % (sorted(cdevs), sorted(CDEVS)))
-    for name, (p, _, kind) in POLICIES.items():             # caps first: schedutil must never see the uncapped range
+    cdevs = wait_for(lambda: bound_cdevs(z) >= cdev_names and bound_cdevs(z), 'the zone binding to the three policies', sleep)
+    if not cdev_names <= cdevs:
+        raise Refused('the zone is bound to %s, not %s' % (sorted(cdevs), sorted(cdev_names)))
+    for name, (p, _, kind) in policies.items():             # caps first: schedutil must never see the uncapped range
         write(Path(CPUFREQ)/p/'scaling_max_freq', caps[kind])
     # The write only updates a frequency QoS request; the kernel applies it to the policy in a deferred work item
     # (cpufreq_notifier_max -> schedule_work(&policy->update)), so an immediate read-back can still show the old maximum
     # (boot 2026-10-15 22:38: "P0 scaling_max_freq did not take" while the system was busy). Wait until every policy has it.
     # At or below the cap: the PMP's fast die-temperature limit (a kernel QoS maximum, CLPC lane) may already sit lower.
-    wait_for(lambda: all(int(read(Path(CPUFREQ)/p/'scaling_max_freq')) <= caps[kind] for p, _, kind in POLICIES.values()),
+    wait_for(lambda: all(int(read(Path(CPUFREQ)/p/'scaling_max_freq')) <= caps[kind] for p, _, kind in policies.values()),
              'the caps on all three policies (scaling_max_freq)', sleep)
-    for name, (p, _, _) in POLICIES.items():
+    for name, (p, _, _) in policies.items():
         write(Path(CPUFREQ)/p/'scaling_governor', 'schedutil')
     say('schedutil on P0/E/P1, caps P %d kHz, E %d kHz; TCMz %.1f C, zone bound to %s' % (
-        caps['P'], caps['E'], int(temp) / 1000, ', '.join(sorted(CDEVS))))
+        caps['P'], caps['E'], int(temp) / 1000, ', '.join(sorted(cdev_names))))
     return 0
 
 

@@ -25,14 +25,16 @@ def load():
 
 class Tree:
     def __init__(self, root, conf='P_MAX_KHZ=2616000\nE_MAX_KHZ=2112000\n', temp='52000', bound=('cpufreq-cpu0', 'cpufreq-cpu1',
-                 'cpufreq-cpu5'), policies=True, zone=True):
+                 'cpufreq-cpu5'), policies=True, zone=True, layout=(('policy0', '0 10 11 12 13'), ('policy1', '1 2 3 4'),
+                 ('policy5', '5 6 7 8 9'))):
         self.root = Path(root)
         if conf is not None:
             (self.root/'etc/m4').mkdir(parents=True)
             (self.root/'etc/m4/cpufreq.conf').write_text(conf)
         th = self.root/'sys/class/thermal'
         th.mkdir(parents=True)
-        for i, name in enumerate(('cpufreq-cpu0', 'cpufreq-cpu1', 'cpufreq-cpu5', 'battery')):
+        cdevs = tuple('cpufreq-cpu' + cpus.split()[0] for _, cpus in layout)
+        for i, name in enumerate(cdevs + ('battery',)):
             (th/('cooling_device%d' % i)).mkdir()
             (th/('cooling_device%d' % i)/'type').write_text(name + '\n')
         if zone:
@@ -42,13 +44,14 @@ class Tree:
                          ('trip_point_0_temp', '113000')):
                 (z/k).write_text(v + '\n')
             (z/'cdev0_trip_point').write_text('0\n')
-            for i, name in enumerate(('cpufreq-cpu0', 'cpufreq-cpu1', 'cpufreq-cpu5')):
+            for i, name in enumerate(cdevs):
                 if name in bound:
                     os.symlink('../cooling_device%d' % i, z/('cdev%d' % i))
         self.cpufreq = self.root/'sys/devices/system/cpu/cpufreq'
         self.cpufreq.mkdir(parents=True)
         if policies:
-            for p, cpus, table in (('policy0', '0 10 11 12 13', P_KHZ), ('policy1', '1 2 3 4', E_KHZ), ('policy5', '5 6 7 8 9', P_KHZ)):
+            for p, cpus in layout:
+                table = E_KHZ if p == 'policy1' else P_KHZ
                 d = self.cpufreq/p
                 d.mkdir()
                 (d/'related_cpus').write_text(cpus + '\n')
@@ -58,7 +61,7 @@ class Tree:
 
     def state(self):
         return {p: ((self.cpufreq/p/'scaling_max_freq').read_text().strip(), (self.cpufreq/p/'scaling_governor').read_text().strip())
-                for p in ('policy0', 'policy1', 'policy5') if (self.cpufreq/p).is_dir()}
+                for p in ('policy0', 'policy1', 'policy5', 'policy9') if (self.cpufreq/p).is_dir()}
 
 
 class Start(unittest.TestCase):
@@ -112,6 +115,27 @@ class Start(unittest.TestCase):
         self.assertEqual({p: g for p, (m, g) in t.state().items()}, {'policy0': 'powersave', 'policy1': 'powersave',
                                                                      'policy5': 'powersave'})
         self.assertNotIn('scaling_governor', [w[0][1] for w in self.writes])
+
+    LAYOUT_73 = (('policy0', '0 5 6 7 8'), ('policy1', '1 2 3 4'), ('policy9', '9 10 11 12 13'))
+
+    def test_linux_7_3_layout_caps_then_schedutil(self):
+        t = Tree(self.dir.name, bound=('cpufreq-cpu0', 'cpufreq-cpu1', 'cpufreq-cpu9'), layout=self.LAYOUT_73)
+        self.assertEqual(self.run_start(), 0)
+        self.assertEqual(t.state(), {'policy0': ('2616000', 'schedutil'), 'policy1': ('2112000', 'schedutil'),
+                                     'policy9': ('2616000', 'schedutil')})
+
+    def test_linux_7_3_layout_needs_its_cdev_bound(self):
+        t = Tree(self.dir.name, bound=('cpufreq-cpu0', 'cpufreq-cpu1'), layout=self.LAYOUT_73)
+        with self.assertRaises(self.m.Refused):
+            self.run_start()
+        self.assertEqual(t.state(), {'policy0': ('4512000', 'powersave'), 'policy1': ('2592000', 'powersave'),
+                                     'policy9': ('4512000', 'powersave')})
+
+    def test_mixed_layout_is_refused(self):
+        t = Tree(self.dir.name, layout=(('policy0', '0 5 6 7 8'), ('policy1', '1 2 3 4'), ('policy5', '9 10 11 12 13')))
+        with self.assertRaises(self.m.Refused):
+            self.run_start()
+        self.assertEqual(self.writes, [])
 
     def test_good_tree_caps_then_schedutil(self):
         t = Tree(self.dir.name)
