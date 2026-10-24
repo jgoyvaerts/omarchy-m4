@@ -44,8 +44,7 @@ hl.env("GDK_DISABLE", "vulkan")
 hl.config({ misc = { disable_xdg_env_checks = true } })
 
 -- The keyboard light is the standard LED class device (apple::kbd_backlight) and Omarchy's own helper drives it. The MacBook top row has
--- no keyboard-light keys, so add SUPER + brightness keys; Omarchy's XF86Kbd* bindings stay as they are (F5/F6 send them through the
--- hwdb remap in /usr/lib/udev/hwdb.d/90-m4-keyboard.hwdb).
+-- no keyboard-light keys, so add SUPER + brightness keys; Omarchy's XF86Kbd* bindings stay as they are.
 local o = _G.o
 if o then
   o.bind("SUPER + XF86MonBrightnessUp", "Keyboard backlight up", "omarchy-brightness-keyboard up", { repeating = true })
