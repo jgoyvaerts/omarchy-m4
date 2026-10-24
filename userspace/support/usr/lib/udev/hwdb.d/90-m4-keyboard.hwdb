@@ -1,0 +1,7 @@
+# Keys the MacBook's built-in keyboard lacks, as omarchy-mac remaps them
+# (omacom/omarchy-mac#683): F4 (Spotlight) becomes Print, F5 (Dictation) and
+# F6 (Do Not Disturb) dim and brighten the keyboard light. Built-in only.
+evdev:name:Apple MTP [Kk]eyboard:*
+ KEYBOARD_KEY_7003d=sysrq
+ KEYBOARD_KEY_7003e=kbdillumdown
+ KEYBOARD_KEY_7003f=kbdillumup

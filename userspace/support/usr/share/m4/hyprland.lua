@@ -44,17 +44,13 @@ hl.env("GDK_DISABLE", "vulkan")
 hl.config({ misc = { disable_xdg_env_checks = true } })
 
 -- The keyboard light is the standard LED class device (apple::kbd_backlight) and Omarchy's own helper drives it. The MacBook top row has
--- no keyboard-light keys, so add SUPER + brightness keys; Omarchy's XF86Kbd* bindings stay as they are. SHIFT + brightness drives the
--- keyboard light as in omarchy-mac (it replaces Omarchy's display minimum/maximum; plain and ALT + brightness keep the display).
+-- no keyboard-light keys, so add SUPER + brightness keys; Omarchy's XF86Kbd* bindings stay as they are (F5/F6 send them through the
+-- hwdb remap in /usr/lib/udev/hwdb.d/90-m4-keyboard.hwdb).
 local o = _G.o
 if o then
   o.bind("SUPER + XF86MonBrightnessUp", "Keyboard backlight up", "omarchy-brightness-keyboard up", { repeating = true })
   o.bind("SUPER + XF86MonBrightnessDown", "Keyboard backlight down", "omarchy-brightness-keyboard down", { repeating = true })
   o.bind("SUPER + SHIFT + XF86MonBrightnessUp", "Keyboard backlight cycle", "omarchy-brightness-keyboard cycle")
-  if o.rebind then
-    o.rebind("SHIFT + XF86MonBrightnessUp", "Keyboard brightness up", "omarchy-brightness-keyboard up", { locked = true, repeating = true })
-    o.rebind("SHIFT + XF86MonBrightnessDown", "Keyboard brightness down", "omarchy-brightness-keyboard down", { locked = true, repeating = true })
-  end
 end
 
 -- The display driver marks the 60 Hz mode preferred and the user config asks for "preferred": run the internal panel at its highest rate like
