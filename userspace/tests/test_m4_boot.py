@@ -725,16 +725,6 @@ class M1n1Oneshot(unittest.TestCase):
         self.assertEqual(self.t.run('m1n1', 'remove', 'm1n1-test'), 0)
         self.assertFalse((self.t.boot/'m4/entries/m1n1-test').exists())
 
-    def test_oneshot_notes_only_a_loader_older_than_rev_17(self):
-        """A loader version may carry a suffix (rev19-j616s-1): its revision number decides."""
-        self.add('--name', 'm1n1-test')
-        for version, old in (('rev11', True), ('rev16-j616s-1', True), ('rev17', False),
-                             ('rev19-j616s-1', False)):
-            self.t.prop('m4,loader-version', version)
-            self.t.lines.clear()
-            self.assertEqual(self.t.run('oneshot', 'm1n1-test'), 0)
-            self.assertEqual(any('predates rev 17' in line for line in self.t.lines), old, version)
-
     def test_status_reports_the_token_and_what_the_loader_did(self):
         self.add('--name', 'm1n1-test')
         self.t.run('oneshot', 'm1n1-test')

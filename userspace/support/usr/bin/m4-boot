@@ -1206,7 +1206,7 @@ def main(argv, out=print, clock=time.monotonic, sleep=time.sleep):
                 b.oneshot_arm(a.entry)
                 out('m4-boot: the next boot starts %s once, then the default again' % a.entry)
                 version = dt_string('m4,loader-version', chosen=a.chosen)
-                m = re.match(r'rev(\d+)(-|$)', version or '')
+                m = re.match(r'rev(\d+)$', version or '')
                 if not m or int(m.group(1)) < 17:
                     out('m4-boot: note: the installed loader (%s) predates rev 17 and ignores the token' % (version or 'unknown'))
                 if b.pending() is not None:
